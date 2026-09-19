@@ -1,0 +1,93 @@
+name: Build Flutter APK (with fvp native libs)
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    name: Build APK (Linux · fvp prebuilt so)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter SDK (锁定 3.35.6)
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.35.6'
+          channel: stable
+          cache: true
+
+      - name: 装 Android 构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang unzip curl
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter analyze
+        run: flutter analyze --no-fatal-infos || true
+
+      - name: flutter test
+        run: flutter test
+
+      # fvp 第一次集成会下载/编译 libmdk + ffmpeg so 库 (10~20 分钟)
+      - name: 构建 release APK
+        run: |
+          flutter build apk --release \
+            --target-platform=android-arm64 \
+            --split-per-abi=false
+
+      - name: 提取 lib/ 下所有 so 库
+        run: |
+          mkdir -p artifact
+          cd artifact
+          unzip -o ../build/app/outputs/flutter-apk/app-release.apk
+          echo "=== APK 内全部 so 文件 ==="
+          find lib -name "*.so" | sort
+          echo "=== so 文件大小 ==="
+          du -h lib/*/lib*.so 2>/dev/null | sort
+
+      - name: 把 APK 当 artifact 上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-release
+          path: |
+            build/app/outputs/flutter-apk/app-release.apk
+            artifact/lib/**/*.so
+          if-no-files-found: error
+          retention-days: 14
+
+  build-so-only:
+    name: Build fvp prebuilt so libs (zip only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: build-android
+
+    steps:
+      - name: 下载 APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: apk-release
+          path: artifact
+
+      - name: 打包 so 库
+        run: |
+          cd artifact
+          zip -r fvp-native-libs.zip lib/
+          ls -lh fvp-native-libs.zip
+
+      - name: 上传 so-only artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fvp-native-libs
+          path: artifact/fvp-native-libs.zip
+          retention-days: 30

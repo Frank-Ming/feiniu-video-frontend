@@ -1,0 +1,33 @@
+name: feiniu_video
+description: 飞牛短视频 - NAS 视频抖音式播放器
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.22.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # 视频播放：fvp 在 Android 上提供 libmdk/FFmpeg 内核解码，
+  #          解决 HEVC/AV1/MKV 等编码兼容问题
+  #          其它平台继续用 video_player
+  video_player: ^2.9.2
+  fvp: ^0.38.1
+  # HTTP 请求
+  http: ^1.2.2
+  # 共享参数（保存后端地址等）
+  shared_preferences: ^2.3.2
+  # 路径工具
+  path_provider: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  path_provider_platform_interface: ^2.1.2
+
+flutter:
+  uses-material-design: true

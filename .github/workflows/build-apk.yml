@@ -40,11 +40,12 @@ jobs:
         run: flutter test
 
       # fvp 第一次集成会下载/编译 libmdk + ffmpeg so 库 (10~20 分钟)
-      - name: 构建 release APK
+      - name: 构建 release APK (单 ABI,arm64)
         run: |
+          # 新版 Flutter (3.16+) 用 --split-per-abi 作为 boolean flag,
+          # 不接 =false。直接构建单 ABI 减少 fvp 编译时间
           flutter build apk --release \
-            --target-platform=android-arm64 \
-            --split-per-abi=false
+            --target-platform=android-arm64
 
       - name: 提取 lib/ 下所有 so 库
         run: |

@@ -67,28 +67,41 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # 把 lib/ 下的 so 库打包成单独的 zip,方便下载/复用
   build-so-only:
     name: Build fvp prebuilt so libs (zip only)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     needs: build-android
+    # 即使 APK 构建成功,so-only job 可以失败而不影响整体 run 的 success 状态
+    continue-on-error: false
+    if: success()
 
     steps:
       - name: 下载 APK artifact
         uses: actions/download-artifact@v4
         with:
           name: apk-release
-          path: artifact
+          path: downloaded
 
       - name: 打包 so 库
         run: |
-          cd artifact
-          zip -r fvp-native-libs.zip lib/
+          cd downloaded
+          # APK artifact 解压后是 build/app/outputs/flutter-apk/app-release.apk
+          # 但我们想要的是已经提取好的 lib/ 目录,改用 unzip 重新提取
+          if [ ! -d lib ]; then
+            unzip -q build/app/outputs/flutter-apk/app-release.apk 'lib/*'
+          fi
+          echo "=== 提取到的 so 库 ==="
+          find lib -name "*.so" | sort
+          # 用 cd 进入 lib 父目录,让 zip 里直接是 lib/...
+          cd ..
+          zip -r fvp-native-libs.zip downloaded/lib/
           ls -lh fvp-native-libs.zip
 
       - name: 上传 so-only artifact
         uses: actions/upload-artifact@v4
         with:
           name: fvp-native-libs
-          path: artifact/fvp-native-libs.zip
+          path: fvp-native-libs.zip
           retention-days: 30

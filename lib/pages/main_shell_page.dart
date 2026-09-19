@@ -24,6 +24,7 @@ import 'package:video_player/video_player.dart';
 
 import '../models/video_item.dart';
 import '../services/api_service.dart';
+import '../services/debug_log.dart';
 import '../services/prefetch_manager.dart';
 import '../services/progress_reporter.dart';
 import '../theme.dart';
@@ -185,8 +186,12 @@ class _MainShellPageState extends State<MainShellPage>
   // ---------- 调试 ----------
   void _debugLog(String msg) {
     if (!_debugEnabled) return;
-    _debugLogs.add('${DateTime.now().toIso8601String().substring(11, 19)} $msg');
+    final ts = DateTime.now().toIso8601String().substring(11, 19);
+    final line = '$ts $msg';
+    _debugLogs.add(line);
     if (_debugLogs.length > 200) _debugLogs.removeAt(0);
+    // 同时写到手机本地文件方便排错
+    DebugLog.i(msg);
   }
 
   // ---------- 视频流 ----------
@@ -977,6 +982,9 @@ class _MainShellPageState extends State<MainShellPage>
     return NotificationListener<ScrollNotification>(
       // 不做任何事，仅用于诊断
       child: PageView.builder(
+        // 用 _videos 的 hashCode 作为 key,列表/filter 改变时强制重建
+        // 否则 Flutter 会复用旧 _FeedItem 导致 controller 状态错乱甚至闪退
+        key: ValueKey('pageview_${_videos.length}_${_videos.isEmpty ? 0 : _videos[0].id}'),
         controller: _pageController,
         scrollDirection: Axis.vertical,
         itemCount: _videos.length,
@@ -1534,9 +1542,11 @@ class _FeedItemState extends State<_FeedItem> {
             left: 16, bottom: 28, right: 80,
             child: _buildInfo(video),
           ),
-          // 全屏按钮：仅横屏时显示,放在横屏视频画面下方 ~50px 居中
-          // 竖屏不显示 (竖屏本身就是全屏,点击视频即可暂停/拖动进度条)
-          if (MediaQuery.of(context).orientation == Orientation.landscape)
+          // 全屏按钮：仅当视频是横屏比例 (>1) 时显示,
+          // 放在视频下方约 50px 居中。
+          // 视频比例 = 视频宽/视频高;>1 表示视频本身是横屏内容(电影/横屏短剧)
+          // 不依赖手机物理方向,只依赖视频内容
+          if (widget.entry.aspectRatio > 1.0)
             _buildLandscapeExitButton(context),
           // 倍速按钮：进度条上方右下，跟进度条一同出现/消失
           if (_showControls)
@@ -1591,6 +1601,23 @@ class _FeedItemState extends State<_FeedItem> {
 
   Widget _buildVideo(_VideoEntry entry) {
     if (entry.controller == null || !entry.initialized) {
+      // 占位视频 (loading_*) 时显示加载圈,避免黑屏
+      if (widget.video.id.startsWith('loading_')) {
+        return const ColoredBox(
+          color: Colors.black,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(color: Colors.white),
+                SizedBox(height: 16),
+                Text('加载下一个视频...',
+                    style: TextStyle(color: Colors.white70, fontSize: 13)),
+              ],
+            ),
+          ),
+        );
+      }
       return const ColoredBox(color: Colors.black);
     }
     return AspectRatio(

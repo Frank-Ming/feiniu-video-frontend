@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/video_item.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
+import '../services/debug_log.dart';
 import '../services/endpoint_store.dart';
 import '../theme.dart';
 import 'login_page.dart';
@@ -37,9 +38,10 @@ class _SettingsPageState extends State<SettingsPage> {
   void _setDebug(bool v) {
     setState(() => _debugEnabled = v);
     MainShellPage.globalDebugEnabled = v;
+    DebugLog.enable(v);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(v ? '调试日志已开启' : '调试日志已关闭'),
-      duration: const Duration(seconds: 1),
+      content: Text(v ? '调试日志已开启,日志写入手机本地' : '调试日志已关闭'),
+      duration: const Duration(seconds: 2),
     ));
   }
 
@@ -493,9 +495,53 @@ class _SettingsPageState extends State<SettingsPage> {
                 ),
                 const SizedBox(height: 4),
                 const Text(
-                  '开启后主页会显示 DEBUG 标记，并记录播放/转码日志',
+                  '开启后主页会显示 DEBUG 标记,并记录播放/转码日志到手机本地',
                   style: TextStyle(color: AppColors.textTertiary, fontSize: 11),
                 ),
+                const SizedBox(height: 12),
+                // 后端版本信息 (实测时显示在客户端旁边,方便判断版本)
+                FutureBuilder<Map<String, dynamic>>(
+                  future: widget.api?.getVersion(),
+                  builder: (ctx, snap) {
+                    final backendVer = snap.hasData
+                        ? (snap.data!['version']?.toString() ?? '?')
+                        : (snap.hasError ? '获取失败' : '加载中…');
+                    return Row(
+                      children: [
+                        const Icon(Icons.cloud_outlined,
+                            color: AppColors.textTertiary, size: 16),
+                        const SizedBox(width: 6),
+                        Text(
+                          '后端 v$backendVer',
+                          style: const TextStyle(
+                              color: AppColors.textTertiary, fontSize: 11),
+                        ),
+                        const Spacer(),
+                        Text(
+                          '客户端 v$_appVersion',
+                          style: const TextStyle(
+                              color: AppColors.textTertiary, fontSize: 11),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                if (_debugEnabled) ...[
+                  const SizedBox(height: 6),
+                  FutureBuilder<String?>(
+                    future: DebugLog.filePath(),
+                    builder: (ctx, snap) {
+                      final p = snap.data ?? '加载中…';
+                      return Text(
+                        '日志文件: $p',
+                        style: const TextStyle(
+                            color: AppColors.textTertiary, fontSize: 10),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      );
+                    },
+                  ),
+                ],
               ],
             ),
           ),

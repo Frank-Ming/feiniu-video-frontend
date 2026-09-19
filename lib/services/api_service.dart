@@ -19,6 +19,27 @@ class ApiService {
 
   void setToken(String? t) { token = t; }
 
+  /// 拉取后端版本信息(用于显示在设置页)
+  Future<Map<String, dynamic>> getVersion() async {
+    final r = await http.get(_uri('/api/version', null), headers: _headers());
+    if (r.statusCode != 200) {
+      throw Exception('获取版本失败: ${r.statusCode}');
+    }
+    return jsonDecode(r.body) as Map<String, dynamic>;
+  }
+
+  /// 后端健康检查(用于启动时挑选可达 endpoint)
+  Future<bool> ping() async {
+    try {
+      final r = await http
+          .get(_uri('/api/health'))
+          .timeout(const Duration(seconds: 4));
+      return r.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Map<String, String> _headers() {
     final h = <String, String>{};
     if (token != null && token!.isNotEmpty) {
@@ -33,17 +54,6 @@ class ApiService {
       path: path,
       queryParameters: params?.map((k, v) => MapEntry(k, '$v')),
     );
-  }
-
-  Future<bool> health() async {
-    try {
-      final r = await http
-          .get(_uri('/api/health'))
-          .timeout(const Duration(seconds: 4));
-      return r.statusCode == 200;
-    } catch (_) {
-      return false;
-    }
   }
 
   /// 详细诊断：返回带详细异常信息的字符串，便于排查网络问题

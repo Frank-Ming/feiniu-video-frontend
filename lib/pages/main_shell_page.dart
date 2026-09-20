@@ -232,51 +232,12 @@ class _MainShellPageState extends State<MainShellPage>
         onError: () {
           if (mounted) setState(() {});
           _debugLog('init error #${v.id}: ${e.initError}');
-          _maybeRequestTranscode(index);
+          // NAS 转码已禁用 —— init 失败由用户在错误页手动点"跳过"切下一条
+          // (v6.4 后保留 _maybeRequestTranscode 但不再调用,作为兜底)
         },
       );
       return e;
     });
-  }
-
-  Future<void> _maybeRequestTranscode(int index) async {
-    if (index < 0 || index >= _videos.length) return;
-    final entry = _entries[index];
-    if (entry == null || entry.transcodeRequested) return;
-    entry.transcodeRequested = true;
-    _debugLog('请求转码 #${_videos[index].id}');
-    await widget.api.requestTranscode(_videos[index].id);
-    if (mounted) {
-      setState(() {});
-      _pollTranscode(index);
-    }
-  }
-
-  Future<void> _pollTranscode(int index) async {
-    if (index < 0 || index >= _videos.length) return;
-    final vid = _videos[index].id;
-    for (int i = 0; i < 60; i++) {
-      await Future.delayed(const Duration(seconds: 5));
-      if (!mounted) return;
-      final res = await widget.api.transcodeStatus(vid);
-      if (res == null) continue;
-      final hasCache = res['has_cache'] == true;
-      final task = res['task'] as Map<String, dynamic>?;
-      final status = task?['status'] as String?;
-      _debugLog('转码 #$vid: $status has_cache=$hasCache');
-      if (mounted) setState(() {});
-      if (hasCache) {
-        final entry = _entries[index];
-        if (entry != null) {
-          entry.dispose();
-          _entries.remove(index);
-        }
-        if (mounted) setState(() {});
-        _ensureVideoEntry(index);
-        return;
-      }
-      if (status == 'failed') break;
-    }
   }
 
   Future<void> _onPageChanged(int idx) async {
@@ -872,9 +833,11 @@ class _MainShellPageState extends State<MainShellPage>
       _resumeIndex = insertAt;
     });
     _rebuildEntriesAfterInsert(insertAt);
-    // 注意:不要主动 jumpToPage —— 视频是自动播完触发的,此时用户已经在新位置
-    // 主动 jumpToPage 会和 PageView 内部的 onPageChanged 抢状态,导致"刷着刷着
-    // 回到第一个" 或者重复触发 _appendNext。
+    // 主动 jumpToPage:这是用户主动点"跳过"触发的,必须物理滚到新位置
+    // (不依赖 PageView 自动同步 _currentIndex,某些边界条件下 PageView 不滚动)
+    if (_pageController.hasClients) {
+      _pageController.jumpToPage(insertAt);
+    }
     // 2. 后台异步获取真实视频
     VideoItem? next;
     final exclude = <String>{
@@ -1302,7 +1265,6 @@ class _VideoEntry {
   bool initialized = false;
   double aspectRatio = 9 / 16;
   String? initError;
-  bool transcodeRequested = false;
 
   ProgressReporter? _reporter;
   Duration _lastPosForFlush = Duration.zero;
@@ -1638,9 +1600,10 @@ class _FeedItemState extends State<_FeedItem> {
           ),
           // 全屏按钮：仅当视频是横屏比例 (>1) 时显示,
           // 放在视频下方约 50px 居中。
-          // 视频比例 = 视频宽/视频高;>1 表示视频本身是横屏内容(电影/横屏短剧)
-          // 不依赖手机物理方向,只依赖视频内容
-          if (widget.entry.aspectRatio > 1.0)
+          // 横屏按钮:仅当视频是横屏比例(>1) 且 手机当前是竖屏时才显示
+          // 进入横屏后用户按返回就是退出横屏,所以按钮本身不需要"退出全屏"
+          if (widget.entry.aspectRatio > 1.0 &&
+              MediaQuery.of(context).orientation == Orientation.portrait)
             _buildLandscapeExitButton(context),
           // 倍速按钮：进度条上方右下，跟进度条一同出现/消失
           if (_showControls)
@@ -1911,37 +1874,21 @@ class _LoadingOrError extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                if (entry.transcodeRequested) ...[
-                  const Icon(Icons.hourglass_top, color: Colors.white, size: 48),
-                  const SizedBox(height: 12),
-                  const Text(
-                    '正在转码兼容格式...',
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '首次播放此格式，NAS 端转码中（1~3 分钟）',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.white70, fontSize: 13),
-                  ),
-                  const SizedBox(height: 20),
-                ] else ...[
-                  const Icon(Icons.cloud_off, color: Colors.white70, size: 48),
-                  const SizedBox(height: 12),
-                  const Text(
-                    '加载失败',
-                    style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    entry.initError!,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white70, fontSize: 12),
-                    maxLines: 3,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 20),
-                ],
+                const Icon(Icons.cloud_off, color: Colors.white70, size: 48),
+                const SizedBox(height: 12),
+                const Text(
+                  '加载失败',
+                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  entry.initError!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: Colors.white70, fontSize: 12),
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 20),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
@@ -1951,7 +1898,6 @@ class _LoadingOrError extends StatelessWidget {
                         entry.controller = null;
                         entry.initialized = false;
                         entry.initError = null;
-                        entry.transcodeRequested = false;
                         entry.init(
                           onAspectReady: () {},
                           onError: () {},

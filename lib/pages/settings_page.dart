@@ -208,23 +208,23 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<void> _resumeFromHistory(Map<String, dynamic> rec) async {
     if (widget.api == null) return;
     final vid = rec['video_id'] as String?;
-    if (vid == null) return;
-    // 找到这条记录在 _history 里的索引 —— 进入 history 模式时
-    // 把整个 history 列表按时间倒序带过去,上滑/下滑在 history 内切换
-    final startIndex = _history.indexWhere((h) => h['video_id'] == vid);
-    if (startIndex < 0) {
-      _showSnack('这条记录已不存在');
+    if (vid == null) {
+      _showSnack('这条记录没有 video_id');
       return;
     }
+    _showSnack('正在加载观看记录...');
     try {
       // 拿到整库视频,按 history 顺序(时间倒序)排,过滤掉已被删除的
       final allVideos = await widget.api!.listVideos();
       final byId = {for (final v in allVideos) v.id: v};
       final historyVideos = <VideoItem>[];
       final historyRecs = <Map<String, dynamic>>[];
-      for (final r in _history) {
+      int idx = -1;
+      for (int i = 0; i < _history.length; i++) {
+        final r = _history[i];
         final v = byId[r['video_id']];
         if (v != null) {
+          if (r['video_id'] == vid) idx = historyVideos.length;
           historyVideos.add(v);
           historyRecs.add(r);
         }
@@ -233,14 +233,14 @@ class _SettingsPageState extends State<SettingsPage> {
         _showSnack('这些视频已全部被删除');
         return;
       }
-      final idx = historyRecs.indexWhere((r) => r['video_id'] == vid);
+      if (idx < 0) idx = 0; // 兜底:找不到当前视频就跳到第一条
       if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(
         builder: (_) => MainShellPage(
           api: widget.api!,
           username: widget.username ?? '',
           initialVideos: historyVideos,
-          initialIndex: idx < 0 ? 0 : idx,
+          initialIndex: idx,
           autoResumeFromHistory: rec,
           historyMode: true,
         ),

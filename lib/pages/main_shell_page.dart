@@ -30,6 +30,7 @@ import '../services/progress_reporter.dart';
 import '../theme.dart';
 import '../widgets/dy_progress_bar.dart';
 import '../widgets/episode_picker.dart';
+import '../widgets/video_info_dialog.dart';
 import 'login_page.dart';
 import 'settings_page.dart';
 import 'user_profile_page.dart';
@@ -42,6 +43,7 @@ class MainShellPage extends StatefulWidget {
     this.initialVideos,
     this.initialIndex = 0,
     this.autoResumeFromHistory,
+    this.historyMode = false,
   });
 
   final ApiService api;
@@ -49,6 +51,13 @@ class MainShellPage extends StatefulWidget {
   final List<VideoItem>? initialVideos;
   final int initialIndex;
   final Map<String, dynamic>? autoResumeFromHistory;
+
+  /// true 表示进入"观看记录模式":
+  /// - _videos 是整个 history 列表(按时间倒序)
+  /// - 上滑/下滑只在 history 内切换
+  /// - 左上角显示返回按钮
+  /// - 退出主页后调用 onExitHistory(如果非 null)
+  final bool historyMode;
 
   /// 全局调试开关：设置页可以读写，主页监听
   /// 这样从设置页改完回到主页能即时反映
@@ -66,6 +75,10 @@ class _MainShellPageState extends State<MainShellPage>
   int _resumeIndex = 0;
   bool _bootstrapLoading = true;
   String? _bootstrapErr;
+
+  // 已经看过的视频 id(当前会话内),随机追加时传给后端 exclude,
+  // 避免来回刷到同一条(尤其是第一个刷到的会反复出现)
+  final Set<String> _playedIds = <String>{};
 
   // 当前的筛选状态（空 = 不筛选）
   VideoFilter? _activeFilter;
@@ -102,6 +115,11 @@ class _MainShellPageState extends State<MainShellPage>
       }
       _bootstrapLoading = false;
       WidgetsBinding.instance.addPostFrameCallback((_) async {
+        // initialIndex > 0 时(history 模式),需要主动跳到对应位置
+        // 否则 PageView 渲染从 0 开始,用户看到第一个视频
+        if (_currentIndex > 0 && _pageController.hasClients) {
+          _pageController.jumpToPage(_currentIndex);
+        }
         await _loadUserPermissions();
         if (mounted) _schedulePrefetch();
       });
@@ -144,6 +162,7 @@ class _MainShellPageState extends State<MainShellPage>
       if (!mounted) return;
       setState(() {
         _videos = [entry];
+        _playedIds.add(entry.id); // 第一个视频也算看过
         _currentIndex = 0;
         _resumeIndex = 0;
         _bootstrapLoading = false;
@@ -284,7 +303,10 @@ class _MainShellPageState extends State<MainShellPage>
       c.setVolume(1);
     }
 
-    _schedulePrefetch();
+    // history 模式:不在 _appendNext 里塞新视频
+    if (!widget.historyMode) {
+      _schedulePrefetch();
+    }
   }
 
   // ---------- 短剧模式 ----------
@@ -663,6 +685,11 @@ class _MainShellPageState extends State<MainShellPage>
               title: const Text('筛选视频'),
               onTap: () { Navigator.pop(ctx); _openFilter(); },
             ),
+            ListTile(
+              leading: const Icon(Icons.info_outline),
+              title: const Text('视频详细信息'),
+              onTap: () { Navigator.pop(ctx); _openVideoInfo(); },
+            ),
             if (_canDelete)
               ListTile(
                 leading: const Icon(Icons.delete_outline, color: AppColors.danger),
@@ -686,6 +713,30 @@ class _MainShellPageState extends State<MainShellPage>
         ),
       ),
     );
+  }
+
+  // ---------- 视频详细信息 ----------
+  Future<void> _openVideoInfo() async {
+    if (_currentIndex < 0 || _currentIndex >= _videos.length) return;
+    final video = _videos[_currentIndex];
+    if (video.id.startsWith('loading_')) return;
+    final entry = _entries[_currentIndex];
+    final controller = entry?.controller;
+    final wasPlaying = controller?.value.isPlaying ?? false;
+    if (wasPlaying) await controller?.pause();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => VideoInfoDialog(
+        api: widget.api,
+        videoId: video.id,
+      ),
+    );
+    // 弹窗关闭后:如果之前在播,继续播;否则保持暂停
+    if (wasPlaying && mounted) {
+      await controller?.play();
+    }
   }
 
   // ---------- 删除当前视频 ----------
@@ -776,7 +827,28 @@ class _MainShellPageState extends State<MainShellPage>
       _seriesNext(); // 短剧里：尝试到下一集
       return;
     }
+    if (widget.historyMode) {
+      // history 模式:跳到 history 列表下一条(没有就到头)
+      _historyNext();
+      return;
+    }
+    // 把当前视频加入 playedIds,避免下次随机又拿到它(尤其转码失败或坏的视频)
+    if (_currentIndex >= 0 && _currentIndex < _videos.length) {
+      _playedIds.add(_videos[_currentIndex].id);
+    }
     _appendNext(); // 普通模式：拿一个新随机视频放在当前 index 后一位
+  }
+
+  /// history 模式下滑到下一条(到末尾则停在最后一条)
+  void _historyNext() {
+    if (_currentIndex < _videos.length - 1) {
+      _pageController.nextPage(
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _debugLog('history 已是最后一条');
+    }
   }
 
   /// 拉一个新随机视频，插到当前 index 之后，自动滚动到下一个
@@ -800,15 +872,17 @@ class _MainShellPageState extends State<MainShellPage>
       _resumeIndex = insertAt;
     });
     _rebuildEntriesAfterInsert(insertAt);
-    if (_pageController.hasClients) {
-      _pageController.jumpToPage(insertAt);
-    }
+    // 注意:不要主动 jumpToPage —— 视频是自动播完触发的,此时用户已经在新位置
+    // 主动 jumpToPage 会和 PageView 内部的 onPageChanged 抢状态,导致"刷着刷着
+    // 回到第一个" 或者重复触发 _appendNext。
     // 2. 后台异步获取真实视频
     VideoItem? next;
-    final exclude = _videos
-        .where((v) => !v.id.startsWith('loading_'))
-        .map((v) => v.id)
-        .toList();
+    final exclude = <String>{
+      // 当前列表里所有非占位视频
+      ..._videos.where((v) => !v.id.startsWith('loading_')).map((v) => v.id),
+      // 本会话内已经看过的(避免来回刷到第一条)
+      ..._playedIds,
+    }.toList();
     try {
       if (_activeFilter != null && !_activeFilter!.isEmpty) {
         try {
@@ -856,7 +930,9 @@ class _MainShellPageState extends State<MainShellPage>
     final phIdx = _videos.indexWhere((v) => v.id == placeholder.id);
     if (phIdx < 0) return; // 用户已经滑走
     setState(() {
-      _videos[phIdx] = next!;
+      final v = next!;
+      _videos[phIdx] = v;
+      _playedIds.add(v.id); // 已看过,后续随机不再推这条
     });
     _rebuildEntriesAfterInsert(phIdx + 1);
     _schedulePrefetch();
@@ -982,9 +1058,9 @@ class _MainShellPageState extends State<MainShellPage>
     return NotificationListener<ScrollNotification>(
       // 不做任何事，仅用于诊断
       child: PageView.builder(
-        // 用 _videos 的 hashCode 作为 key,列表/filter 改变时强制重建
-        // 否则 Flutter 会复用旧 _FeedItem 导致 controller 状态错乱甚至闪退
-        key: ValueKey('pageview_${_videos.length}_${_videos.isEmpty ? 0 : _videos[0].id}'),
+        // key 只用 _videos[0].id —— filter/外部 reset 时第一条 id 变,强制重建;
+        // 但 _appendNext 不会改第一条,频繁重建 PageView 会让用户感觉"回到第一个"
+        key: ValueKey('pageview_${_videos.isEmpty ? 0 : _videos[0].id}'),
         controller: _pageController,
         scrollDirection: Axis.vertical,
         itemCount: _videos.length,
@@ -1023,6 +1099,24 @@ class _MainShellPageState extends State<MainShellPage>
             onTap: () => _exitSeriesMode(),
           ),
         if (_seriesId != null) const SizedBox(width: 8),
+        // history 模式下显示"返回"按钮(退出观看记录模式)
+        if (widget.historyMode)
+          _GlassCircle(
+            icon: Icons.arrow_back,
+            onTap: () {
+              // history 模式是用 pushReplacement 进来的,Navigator.pop 会回到上一页
+              if (Navigator.canPop(context)) {
+                Navigator.pop(context);
+              } else {
+                // 兜底:重建一个空壳退到登录页
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const LoginPage()),
+                  (_) => false,
+                );
+              }
+            },
+          ),
+        if (widget.historyMode) const SizedBox(width: 8),
         // 用户名 pill（始终显示）
         _GlassPill(
           icon: Icons.person_outline,
@@ -1626,33 +1720,35 @@ class _FeedItemState extends State<_FeedItem> {
     );
   }
 
-  /// 横屏下"退出全屏"按钮:长条 pill,放在视频画面下方约 50px 水平居中
-  /// 视频宽度 = MediaQuery 宽;视频高度 = 宽 / 长宽比;视频在 Stack 中垂直居中,
-  /// 所以从屏幕底部往上 bottom = (屏高 - 视频高)/2 - 50
+  /// 横屏按钮:仅当视频是横屏比例 (>1) 时显示
+  /// 文字按手机当前物理方向动态切换:
+  ///   竖屏时显示"点击横屏" + fullscreen 图标 → 点击进入横屏
+  ///   横屏时显示"退出全屏" + fullscreen_exit 图标 → 点击退出横屏
   Widget _buildLandscapeExitButton(BuildContext context) {
     final size = MediaQuery.of(context).size;
+    final isLandscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
     final aspect = widget.entry.aspectRatio == 0
         ? 16 / 9
         : widget.entry.aspectRatio;
-    // 横屏时强制按宽屏(>=1)来计算视频高度,避免竖屏视频进来撑爆
     final effectiveAspect = aspect < 1.0 ? 1.0 / aspect : aspect;
     final videoH = size.width / effectiveAspect;
-    final gapBelowVideo = (size.height - videoH) / 2; // 视频下方留白
-    // 如果视频比屏幕还高(竖屏视频横屏显示),视频会铺满全屏,
-    // 此时 gap < 0,按钮 bottom 强制放在屏幕下方 30px,确保可见
+    final gapBelowVideo = (size.height - videoH) / 2;
     double bottom;
     if (gapBelowVideo < 60) {
-      bottom = 30; // 视频铺满,按钮放底部
+      bottom = 30;
     } else {
       bottom = (gapBelowVideo - 50).clamp(8.0, size.height / 2);
     }
+    final label = isLandscape ? '退出全屏' : '点击横屏';
+    final icon = isLandscape ? Icons.fullscreen_exit : Icons.fullscreen;
     return Positioned(
       left: 0, right: 0,
       bottom: bottom,
       child: Center(
         child: Semantics(
           button: true,
-          label: '退出全屏',
+          label: label,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: _toggleLandscape,
@@ -1665,15 +1761,14 @@ class _FeedItemState extends State<_FeedItem> {
                 border: Border.all(
                     color: Colors.white.withValues(alpha: 0.4), width: 1),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.fullscreen_exit,
-                      color: Colors.white, size: 18),
-                  SizedBox(width: 8),
-                  Text('退出全屏',
-                      style: TextStyle(
+                  Icon(icon, color: Colors.white, size: 18),
+                  const SizedBox(width: 8),
+                  Text(label,
+                      style: const TextStyle(
                           color: Colors.white,
                           fontSize: 13,
                           fontWeight: FontWeight.w600,
@@ -1745,17 +1840,10 @@ class _FeedItemState extends State<_FeedItem> {
       return const SizedBox.shrink();
     }
     return Container(
+      // 用纯黑半透明底,不要渐变 —— 之前渐变底在某些设备上渲染异常,
+      // 看上去像进度条 "透明掉" 了一样
+      color: Colors.black.withValues(alpha: 0.55),
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [
-            Colors.black.withValues(alpha: 0.0),
-            Colors.black.withValues(alpha: 0.6),
-          ],
-        ),
-      ),
       child: DyProgressBar(
         current: c.value.position,
         total: c.value.duration,
@@ -1790,9 +1878,19 @@ class _LoadingOrError extends StatelessWidget {
     if (entry.controller != null && entry.initialized) {
       return const SizedBox.shrink();
     }
+    // 占位视频 (loading_*) —— 让 _buildVideo 自己的 spinner 显示,
+    // 这里不要铺黑屏把 spinner 和左下视频名盖掉
+    if (entry.video.id.startsWith('loading_')) {
+      return const SizedBox.shrink();
+    }
     if (entry.controller == null && entry.initError == null) {
+      // 视频还在 init —— 显示一个居中 spinner,不铺全屏黑屏
+      // (否则会盖住左下视频名/路径,看上去像黑屏且没信息)
       return const Positioned.fill(
-        child: ColoredBox(color: Colors.black),
+        child: ColoredBox(
+          color: Colors.black,
+          child: Center(child: CircularProgressIndicator(color: Colors.white)),
+        ),
       );
     }
     if (entry.initError == null) {

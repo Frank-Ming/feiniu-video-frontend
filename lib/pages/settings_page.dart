@@ -209,25 +209,53 @@ class _SettingsPageState extends State<SettingsPage> {
     if (widget.api == null) return;
     final vid = rec['video_id'] as String?;
     if (vid == null) return;
+    // 找到这条记录在 _history 里的索引 —— 进入 history 模式时
+    // 把整个 history 列表按时间倒序带过去,上滑/下滑在 history 内切换
+    final startIndex = _history.indexWhere((h) => h['video_id'] == vid);
+    if (startIndex < 0) {
+      _showSnack('这条记录已不存在');
+      return;
+    }
     try {
-      final detail = await widget.api!.getVideo(vid);
-      final video = VideoItem.fromJson(detail);
+      // 拿到整库视频,按 history 顺序(时间倒序)排,过滤掉已被删除的
+      final allVideos = await widget.api!.listVideos();
+      final byId = {for (final v in allVideos) v.id: v};
+      final historyVideos = <VideoItem>[];
+      final historyRecs = <Map<String, dynamic>>[];
+      for (final r in _history) {
+        final v = byId[r['video_id']];
+        if (v != null) {
+          historyVideos.add(v);
+          historyRecs.add(r);
+        }
+      }
+      if (historyVideos.isEmpty) {
+        _showSnack('这些视频已全部被删除');
+        return;
+      }
+      final idx = historyRecs.indexWhere((r) => r['video_id'] == vid);
       if (!mounted) return;
       Navigator.of(context).pushReplacement(MaterialPageRoute(
         builder: (_) => MainShellPage(
           api: widget.api!,
           username: widget.username ?? '',
-          initialVideos: [video],
-          initialIndex: 0,
+          initialVideos: historyVideos,
+          initialIndex: idx < 0 ? 0 : idx,
           autoResumeFromHistory: rec,
+          historyMode: true,
         ),
       ));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('无法打开视频: $e')),
-      );
+      _showSnack('无法打开视频: $e');
     }
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg)),
+    );
   }
 
   Future<void> _deleteHistoryItem(Map<String, dynamic> rec) async {

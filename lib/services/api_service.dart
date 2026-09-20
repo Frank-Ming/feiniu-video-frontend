@@ -227,6 +227,15 @@ class ApiService {
     return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
   }
 
+  /// 视频详细信息(用于弹窗显示):文件大小、修改时间、编码/帧率/分辨率等
+  Future<Map<String, dynamic>> getVideoInfo(String videoId) async {
+    final r = await http.get(_uri('/api/videos/$videoId/info'), headers: _headers());
+    if (r.statusCode != 200) {
+      throw Exception('获取视频详细信息失败: ${r.statusCode}');
+    }
+    return jsonDecode(utf8.decode(r.bodyBytes)) as Map<String, dynamic>;
+  }
+
   /// 删除一个视频（需要后端 can_delete 权限）
   Future<bool> deleteVideo(String videoId) async {
     try {

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../models/video_item.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../services/debug_log.dart';
@@ -21,8 +20,6 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   List<EndpointRecord> _endpoints = [];
   List<UserRecord> _users = [];
-  List<Map<String, dynamic>> _history = [];
-  bool _loadingHistory = true;
   String? _activeEndpointId;
   // 应用版本号（与 pubspec.yaml 同步：major.minor）
   static const String _appVersion = '1.0.0';
@@ -77,20 +74,6 @@ class _SettingsPageState extends State<SettingsPage> {
     });
     _activeEndpointId = await store.activeId();
     _users = await auth.list();
-    if (widget.api != null) await _loadHistory();
-  }
-
-  Future<void> _loadHistory() async {
-    setState(() => _loadingHistory = true);
-    try {
-      final h = await widget.api!.getHistory(limit: 100);
-      setState(() {
-        _history = h;
-        _loadingHistory = false;
-      });
-    } catch (_) {
-      setState(() => _loadingHistory = false);
-    }
   }
 
   Future<void> _setActiveEndpoint(String id) async {
@@ -203,98 +186,6 @@ class _SettingsPageState extends State<SettingsPage> {
         (_) => false,
       );
     }
-  }
-
-  Future<void> _resumeFromHistory(Map<String, dynamic> rec) async {
-    if (widget.api == null) return;
-    final vid = rec['video_id'] as String?;
-    if (vid == null) {
-      _showSnack('这条记录没有 video_id');
-      return;
-    }
-    _showSnack('正在加载观看记录...');
-    try {
-      // 拿到整库视频,按 history 顺序(时间倒序)排,过滤掉已被删除的
-      final allVideos = await widget.api!.listVideos();
-      final byId = {for (final v in allVideos) v.id: v};
-      final historyVideos = <VideoItem>[];
-      final historyRecs = <Map<String, dynamic>>[];
-      int idx = -1;
-      for (int i = 0; i < _history.length; i++) {
-        final r = _history[i];
-        final v = byId[r['video_id']];
-        if (v != null) {
-          if (r['video_id'] == vid) idx = historyVideos.length;
-          historyVideos.add(v);
-          historyRecs.add(r);
-        }
-      }
-      if (historyVideos.isEmpty) {
-        _showSnack('这些视频已全部被删除');
-        return;
-      }
-      if (idx < 0) idx = 0; // 兜底:找不到当前视频就跳到第一条
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute(
-        builder: (_) => MainShellPage(
-          api: widget.api!,
-          username: widget.username ?? '',
-          initialVideos: historyVideos,
-          initialIndex: idx,
-          autoResumeFromHistory: rec,
-          historyMode: true,
-        ),
-      ));
-    } catch (e) {
-      if (!mounted) return;
-      _showSnack('无法打开视频: $e');
-    }
-  }
-
-  void _showSnack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(msg)),
-    );
-  }
-
-  Future<void> _deleteHistoryItem(Map<String, dynamic> rec) async {
-    final vid = rec['video_id'] as String?;
-    if (vid == null) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: AppColors.bgCard,
-        title: const Text('删除这条记录？'),
-        content: const Text('该视频的历史进度会被清除。'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消')),
-          TextButton(onPressed: () => Navigator.pop(context, true),
-              child: const Text('删除', style: TextStyle(color: AppColors.danger))),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    setState(() => _history.removeWhere((h) => h['video_id'] == vid));
-  }
-
-  String _fmtTime(num? s) {
-    if (s == null) return '--';
-    final sec = s.toDouble();
-    if (sec < 60) return '${sec.toInt()}s';
-    final m = (sec / 60).floor();
-    final r = (sec % 60).round();
-    return '${m}m${r.toString().padLeft(2, '0')}s';
-  }
-
-  String _relTime(num? ts) {
-    if (ts == null) return '';
-    final diff = DateTime.now().millisecondsSinceEpoch / 1000 - ts.toDouble();
-    if (diff < 60) return '刚刚';
-    if (diff < 3600) return '${(diff / 60).floor()} 分钟前';
-    if (diff < 86400) return '${(diff / 3600).floor()} 小时前';
-    return '${(diff / 86400).floor()} 天前';
   }
 
   @override
@@ -429,51 +320,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
 
-          // 观看记录
-          if (widget.api != null) ...[
-            const SizedBox(height: 24),
-            const _SectionTitle('观看记录'),
-            if (_loadingHistory)
-              const Padding(
-                padding: EdgeInsets.all(40),
-                child: Center(child: CircularProgressIndicator(color: AppColors.primary)),
-              )
-            else if (_history.isEmpty)
-              Container(
-                padding: const EdgeInsets.all(28),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: AppColors.bgElev,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppColors.divider),
-                ),
-                child: const Text('还没有观看记录', style: TextStyle(color: AppColors.textTertiary)),
-              )
-            else
-              Container(
-                decoration: BoxDecoration(
-                  color: AppColors.bgElev,
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppColors.divider),
-                ),
-                child: Column(
-                  children: [
-                    for (var i = 0; i < _history.length; i++) ...[
-                      _HistoryTile(
-                        rec: _history[i],
-                        fmtTime: _fmtTime,
-                        relTime: _relTime,
-                        onTap: () => _resumeFromHistory(_history[i]),
-                        onLongPress: () => _deleteHistoryItem(_history[i]),
-                      ),
-                      if (i < _history.length - 1)
-                        const Divider(height: 1, color: AppColors.divider, indent: 14, endIndent: 14),
-                    ],
-                  ],
-                ),
-              ),
-          ],
-
+          // 观看记录已迁移到『我的资料』页(全部展示+可点击续播)
           // 关于 + 版本 + 调试开关
           const SizedBox(height: 24),
           const _SectionTitle('关于'),
@@ -861,96 +708,6 @@ class _UserRow extends StatelessWidget {
         ],
       ),
     );
-  }
-}
-
-class _HistoryTile extends StatelessWidget {
-  const _HistoryTile({
-    required this.rec,
-    required this.fmtTime,
-    required this.relTime,
-    this.onTap,
-    this.onLongPress,
-  });
-  final Map<String, dynamic> rec;
-  final String Function(num?) fmtTime;
-  final String Function(num?) relTime;
-  final VoidCallback? onTap;
-  final VoidCallback? onLongPress;
-
-  double get _progress {
-    final pos = (rec['position'] as num?)?.toDouble() ?? 0;
-    final dur = (rec['duration'] as num?)?.toDouble() ?? 1;
-    if (dur <= 0) return 0;
-    return (pos / dur).clamp(0.0, 1.0);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final name = (rec['name'] as String?)?.trim();
-    final path = (rec['path'] as String?) ?? (rec['dir'] as String?) ?? '';
-    final finished = rec['finished'] == true;
-    final progress = _progress;
-
-    return InkWell(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                width: 38, height: 38,
-                child: CircularProgressIndicator(
-                  value: progress,
-                  strokeWidth: 3,
-                  backgroundColor: AppColors.divider,
-                  valueColor: const AlwaysStoppedAnimation(AppColors.primary),
-                ),
-              ),
-              Icon(
-                finished ? Icons.check : Icons.play_arrow,
-                color: Colors.white, size: 18,
-              ),
-            ],
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  (name == null || name.isEmpty) ? '视频 ${rec['video_id']}' : name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.textPrimary,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  [
-                    if (path.isNotEmpty) path,
-                    fmtTime(rec['position']),
-                    relTime(rec['updated_at']),
-                  ].where((s) => s.isNotEmpty).join(' · '),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: AppColors.textTertiary, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
   }
 }
 

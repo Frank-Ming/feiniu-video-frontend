@@ -81,6 +81,15 @@ class _UserProfilePageState extends State<UserProfilePage> {
     return '${dt.year}-${two(dt.month)}-${two(dt.day)}';
   }
 
+  String _relTime(num? ts) {
+    if (ts == null) return '';
+    final diff = DateTime.now().millisecondsSinceEpoch / 1000 - ts.toDouble();
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return '${(diff / 60).floor()} 分钟前';
+    if (diff < 86400) return '${(diff / 3600).floor()} 小时前';
+    return '${(diff / 86400).floor()} 天前';
+  }
+
   // ---------- 点击观看记录 → 进入 history 模式 ----------
   Future<void> _resumeFromHistory(Map<String, dynamic> rec) async {
     final vid = rec['video_id'] as String?;
@@ -258,8 +267,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
           ),
 
           const SizedBox(height: 24),
-          // 历史小预览
-          const _SectionTitle('最近观看'),
+          // 观看记录(全量展示,从这里点进去就走 history 模式)
+          const _SectionTitle('观看记录'),
           if (_loadingHistory)
             const Padding(
               padding: EdgeInsets.all(40),
@@ -286,12 +295,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
               ),
               child: Column(
                 children: [
-                  for (var i = 0; i < (_history.length > 20 ? 20 : _history.length); i++) ...[
+                  for (var i = 0; i < _history.length; i++) ...[
                     _HistoryRow(
                       rec: _history[i],
+                      relTime: _relTime,
                       onTap: () => _resumeFromHistory(_history[i]),
                     ),
-                    if (i < (_history.length > 20 ? 20 : _history.length) - 1)
+                    if (i < _history.length - 1)
                       const Divider(height: 1, color: AppColors.divider, indent: 14, endIndent: 14),
                   ],
                 ],
@@ -325,8 +335,13 @@ class _StatBox extends StatelessWidget {
 }
 
 class _HistoryRow extends StatelessWidget {
-  const _HistoryRow({required this.rec, this.onTap});
+  const _HistoryRow({
+    required this.rec,
+    required this.relTime,
+    this.onTap,
+  });
   final Map<String, dynamic> rec;
+  final String Function(num? ts) relTime;
   final VoidCallback? onTap;
 
   double get _progress {
@@ -340,6 +355,7 @@ class _HistoryRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final name = (rec['name'] as String?)?.trim();
     final path = (rec['path'] as String?) ?? (rec['dir'] as String?) ?? '';
+    final updated = rec['updated_at'] ?? rec['last_watched'];
     final progress = _progress;
     final finished = rec['finished'] == true;
 
@@ -386,6 +402,11 @@ class _HistoryRow extends StatelessWidget {
                       style: const TextStyle(color: AppColors.textTertiary, fontSize: 12)),
                 ],
               ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              relTime(updated is num ? updated : null),
+              style: const TextStyle(color: AppColors.textTertiary, fontSize: 11),
             ),
           ],
         ),

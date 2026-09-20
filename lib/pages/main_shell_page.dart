@@ -1298,10 +1298,12 @@ class _VideoEntry {
       video.id, full: false,
     );
     VideoPlayerController c;
+    bool usedNetwork = false;
     if (localPath != null) {
       c = VideoPlayerController.file(File(localPath));
     } else {
       c = VideoPlayerController.networkUrl(Uri.parse(api.streamUrl(video.id)));
+      usedNetwork = true;
     }
     controller = c;
 
@@ -1327,7 +1329,53 @@ class _VideoEntry {
       await c.play();
       onAspectReady();
     } catch (e) {
-      initError = e.toString();
+      // stream URL 失败 → 兜底：完整下载到本地后再读本地文件
+      // (MPEG-TS 等容器通过 HTTP stream 时 fvp 嗅探慢/失败,
+      //  但读本地文件时 libavformat 用文件头嗅探就稳得多)
+      if (usedNetwork) {
+        try {
+          await PrefetchManager.instance.prefetchFull(
+            videoId: video.id,
+            url: api.streamUrl(video.id),
+            token: api.token,
+          );
+          final path = await PrefetchManager.instance.localCachePath(
+            video.id, full: true,
+          );
+          if (path != null) {
+            c.dispose();
+            controller = null;
+            final c2 = VideoPlayerController.file(File(path));
+            controller = c2;
+            await c2.initialize().timeout(const Duration(seconds: 20));
+            initialized = true;
+            aspectRatio =
+                c2.value.aspectRatio == 0 ? 9 / 16 : c2.value.aspectRatio;
+            c2.setLooping(true);
+            _reporter = ProgressReporter(api, video.id, 0);
+            _ticker = Timer.periodic(const Duration(seconds: 1), (_) {
+              if (!initialized) return;
+              final pos = c2.value.position;
+              final dur = c2.value.duration;
+              final ms = dur.inMilliseconds;
+              if (ms <= 0) return;
+              final sec = pos.inMilliseconds / 1000.0;
+              _reporter!.duration = ms / 1000.0;
+              _reporter!.report(sec);
+              _lastPosForFlush = pos;
+            });
+            await c2.play();
+            onAspectReady();
+            if (video.duration == null) api.probeDuration(video.id);
+            return;
+          }
+        } catch (e2) {
+          // 重试也失败，把原始异常暴露给 UI
+          initError = '$e (fallback 本地重试也失败: $e2)';
+        }
+      } else {
+        initError = e.toString();
+      }
       if (onError != null) onError();
     }
     if (video.duration == null) {

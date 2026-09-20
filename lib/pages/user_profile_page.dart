@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../models/video_item.dart';
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
 import '../theme.dart';
+import 'main_shell_page.dart';
 
 /// 用户信息页：注册时间、观看时长、退出登录
 class UserProfilePage extends StatefulWidget {
@@ -77,6 +79,56 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final dt = DateTime.fromMillisecondsSinceEpoch((ts * 1000).toInt());
     String two(int v) => v.toString().padLeft(2, '0');
     return '${dt.year}-${two(dt.month)}-${two(dt.day)}';
+  }
+
+  // ---------- 点击观看记录 → 进入 history 模式 ----------
+  Future<void> _resumeFromHistory(Map<String, dynamic> rec) async {
+    final vid = rec['video_id'] as String?;
+    if (vid == null) {
+      _showSnack('这条记录没有 video_id');
+      return;
+    }
+    _showSnack('正在加载观看记录...');
+    try {
+      // 拿整库视频,按 history 顺序排,过滤已被删除的
+      final allVideos = await widget.api.listVideos();
+      final byId = {for (final v in allVideos) v.id: v};
+      final historyVideos = <VideoItem>[];
+      int idx = -1;
+      for (final r in _history) {
+        final v = byId[r['video_id']];
+        if (v != null) {
+          if (r['video_id'] == vid) idx = historyVideos.length;
+          historyVideos.add(v);
+        }
+      }
+      if (historyVideos.isEmpty) {
+        _showSnack('这些视频已全部被删除');
+        return;
+      }
+      if (idx < 0) idx = 0;
+      if (!mounted) return;
+      Navigator.of(context).pushReplacement(MaterialPageRoute(
+        builder: (_) => MainShellPage(
+          api: widget.api,
+          username: widget.username,
+          initialVideos: historyVideos,
+          initialIndex: idx,
+          autoResumeFromHistory: rec,
+          historyMode: true,
+        ),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      _showSnack('无法打开视频: $e');
+    }
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(msg)),
+    );
   }
 
   Future<void> _logout() async {
@@ -235,7 +287,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
               child: Column(
                 children: [
                   for (var i = 0; i < (_history.length > 20 ? 20 : _history.length); i++) ...[
-                    _HistoryRow(rec: _history[i]),
+                    _HistoryRow(
+                      rec: _history[i],
+                      onTap: () => _resumeFromHistory(_history[i]),
+                    ),
                     if (i < (_history.length > 20 ? 20 : _history.length) - 1)
                       const Divider(height: 1, color: AppColors.divider, indent: 14, endIndent: 14),
                   ],
@@ -270,8 +325,9 @@ class _StatBox extends StatelessWidget {
 }
 
 class _HistoryRow extends StatelessWidget {
-  const _HistoryRow({required this.rec});
+  const _HistoryRow({required this.rec, this.onTap});
   final Map<String, dynamic> rec;
+  final VoidCallback? onTap;
 
   double get _progress {
     final pos = (rec['position'] as num?)?.toDouble() ?? 0;
@@ -287,49 +343,52 @@ class _HistoryRow extends StatelessWidget {
     final progress = _progress;
     final finished = rec['finished'] == true;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: Row(
-        children: [
-          Stack(
-            alignment: Alignment.center,
-            children: [
-              SizedBox(
-                width: 32, height: 32,
-                child: CircularProgressIndicator(
-                  value: progress,
-                  strokeWidth: 3,
-                  backgroundColor: AppColors.divider,
-                  valueColor: const AlwaysStoppedAnimation(AppColors.primary),
-                ),
-              ),
-              Icon(finished ? Icons.check : Icons.play_arrow,
-                  color: Colors.white, size: 16),
-            ],
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        child: Row(
+          children: [
+            Stack(
+              alignment: Alignment.center,
               children: [
-                Text(
-                  (name == null || name.isEmpty) ? '视频 ${rec['video_id']}' : name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600),
+                SizedBox(
+                  width: 32, height: 32,
+                  child: CircularProgressIndicator(
+                    value: progress,
+                    strokeWidth: 3,
+                    backgroundColor: AppColors.divider,
+                    valueColor: const AlwaysStoppedAnimation(AppColors.primary),
+                  ),
                 ),
-                const SizedBox(height: 2),
-                Text(path,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: AppColors.textTertiary, fontSize: 12)),
+                Icon(finished ? Icons.check : Icons.play_arrow,
+                    color: Colors.white, size: 16),
               ],
             ),
-          ),
-        ],
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    (name == null || name.isEmpty) ? '视频 ${rec['video_id']}' : name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: AppColors.textPrimary,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(path,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: AppColors.textTertiary, fontSize: 12)),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

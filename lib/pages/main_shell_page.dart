@@ -1865,6 +1865,20 @@ class _LoadingOrError extends StatelessWidget {
       );
     }
     onReportPlayError(entry.initError!);
+    final err = entry.initError!.toLowerCase();
+    // 判断是否是格式/解码错误(而不是网络/权限问题)
+    final isFormatErr = err.contains('codec') ||
+        err.contains('decoder') ||
+        err.contains('format') ||
+        err.contains('hevc') ||
+        err.contains('av1') ||
+        err.contains('h264') ||
+        err.contains('h265') ||
+        err.contains('unsupported') ||
+        err.contains('invalid data');
+    final hintText = isFormatErr
+        ? '此视频格式不被手机播放器支持，请点击跳过'
+        : entry.initError!;
     return Positioned.fill(
       child: Container(
         color: Colors.black.withValues(alpha: 0.75),
@@ -1874,15 +1888,19 @@ class _LoadingOrError extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Icon(Icons.cloud_off, color: Colors.white70, size: 48),
+                Icon(
+                  isFormatErr ? Icons.movie_filter_outlined : Icons.cloud_off,
+                  color: Colors.white70, size: 48,
+                ),
                 const SizedBox(height: 12),
-                const Text(
-                  '加载失败',
-                  style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
+                Text(
+                  isFormatErr ? '视频格式不支持' : '加载失败',
+                  style: const TextStyle(
+                      color: Colors.white, fontSize: 16, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  entry.initError!,
+                  hintText,
                   textAlign: TextAlign.center,
                   style: const TextStyle(color: Colors.white70, fontSize: 12),
                   maxLines: 3,

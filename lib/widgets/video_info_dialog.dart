@@ -146,6 +146,9 @@ class _VideoInfoDialogState extends State<VideoInfoDialog> {
     final v = (probe['video'] as Map?)?.cast<String, dynamic>();
     final a = (probe['audio'] as Map?)?.cast<String, dynamic>();
 
+    // 如果后端没探测到 ffprobe 数据,在顶部加一行提示
+    final probeEmpty = probe.isEmpty;
+
     final dur = info['duration'] ?? probe['duration'];
     final aspect = (v != null && v['width'] != null && v['height'] != null)
         ? (v['width'] as num) / (v['height'] as num)
@@ -182,6 +185,21 @@ class _VideoInfoDialogState extends State<VideoInfoDialog> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        if (probeEmpty)
+          Container(
+            padding: const EdgeInsets.all(10),
+            margin: const EdgeInsets.only(bottom: 8),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.orange.withValues(alpha: 0.5)),
+            ),
+            child: const Text(
+              '后端未安装 ffprobe,无法探测编码/帧率/分辨率。\n'
+              '请在 NAS 容器内 apt-get install -y ffmpeg 后重启。',
+              style: TextStyle(color: Colors.white70, fontSize: 11, height: 1.4),
+            ),
+          ),
         for (final r in entries) _rowView(r),
       ],
     );

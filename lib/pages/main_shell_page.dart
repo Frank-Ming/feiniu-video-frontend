@@ -892,12 +892,29 @@ class _MainShellPageState extends State<MainShellPage>
     // 3. 用真实视频替换占位
     final phIdx = _videos.indexWhere((v) => v.id == placeholder.id);
     if (phIdx < 0) return; // 用户已经滑走
+    // 先 dispose 占位 entry(没真实 controller,只是占位),
+    // 这样 _ensureVideoEntry putIfAbsent 会重建真实视频的 entry
+    final placeholderEntry = _entries.remove(phIdx);
+    placeholderEntry?.dispose();
+    // 之后 entries 索引 > phIdx 的全部要 -1,因为 _videos 在 phIdx 原地替换
+    // (而不是 insert);手动调整 _entries 索引
+    final newEntries = <int, _VideoEntry>{};
+    _entries.forEach((idx, e) {
+      if (idx > phIdx) {
+        newEntries[idx - 1] = e;
+      } else if (idx < phIdx) {
+        newEntries[idx] = e;
+      }
+    });
+    _entries
+      ..clear()
+      ..addAll(newEntries);
     setState(() {
       final v = next!;
       _videos[phIdx] = v;
       _playedIds.add(v.id); // 已看过,后续随机不再推这条
     });
-    _rebuildEntriesAfterInsert(phIdx + 1);
+    // 让 _ensureVideoEntry 在下次 build 时为 phIdx 创建新 entry 并 init
     _schedulePrefetch();
   }
 

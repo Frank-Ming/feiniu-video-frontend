@@ -14,10 +14,19 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   // fvp 注册：在 Android 上让 video_player 用 libmdk/FFmpeg 内核解码,
   // 解决 HEVC/AV1/MKV 等编码兼容问题
-  // 优先 FFmpeg 软解(覆盖所有 codec,麒麟芯片兼容性最好),
-  // MediaCodec 硬解作为可选加速(只对 h264 高效,hevc 在某些麒麟机型兼容性差)
+  // 优先 FFmpeg 软解(覆盖所有 codec,天玑 9000 兼容性最好),
+  // MediaCodec 硬解作为可选加速(只对 h264 高效,hevc 在某些机型兼容性差)
+  // 启用所有 demuxer(mp4/mov/mkv/ts/avi/flv) + 让 libavformat 自动嗅探容器
   fvp.registerWith(options: {
     'video.decoders': ['FFmpeg', 'MediaCodec'],
+    'video.demuxers': [
+      'mov,mp4,m4a,3gp,3g2,mj2',  // mp4/mov
+      'matroska,webm',          // mkv
+      'mpegts',                 // TS(包括 .mp4 扩展名实际是 TS 的)
+      'avi',                    // avi
+      'flv',                    // flv
+      'hls',                    // m3u8
+    ],
     'video.hwaccel': 1,  // 启用硬件加速(仅对 MediaCodec 生效,FFmpeg 是软解)
     'video.packet-buffering': 0,  // 减少缓冲延迟
     'demux.timeout': 15000,  // 15s 探不到就放弃
